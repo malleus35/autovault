@@ -2,6 +2,7 @@ mod cli;
 mod collect;
 mod compile;
 mod config;
+mod index;
 mod llm;
 mod logging;
 mod manifest;
@@ -79,7 +80,21 @@ async fn main() -> anyhow::Result<()> {
             }
             Ok(())
         }
-        Commands::Index => todo!("index"),
+        Commands::Index => {
+            vault.ensure_initialized()?;
+            let manifest = vault.load_manifest()?;
+            let backend = llm::detect_backend()?;
+            index::build_index(
+                &manifest,
+                &vault.wiki_dir(),
+                Some(&vault.prompts_dir()),
+                backend.as_ref(),
+            ).await?;
+            if !config.quiet {
+                println!("Index rebuilt.");
+            }
+            Ok(())
+        }
         Commands::Run { .. } => todo!("run"),
         Commands::Status { .. } => todo!("status"),
         Commands::Lint { .. } => todo!("lint"),
