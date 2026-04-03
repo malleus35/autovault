@@ -1,5 +1,6 @@
 mod cli;
 mod collect;
+mod compile;
 mod config;
 mod llm;
 mod logging;
@@ -54,7 +55,30 @@ async fn main() -> anyhow::Result<()> {
             }
             Ok(())
         }
-        Commands::Compile => todo!("compile"),
+        Commands::Compile => {
+            vault.ensure_initialized()?;
+            let mut manifest = vault.load_manifest()?;
+            let backend = llm::detect_backend()?;
+            let result = compile::compile(
+                &mut manifest,
+                &vault.raw_dir(),
+                &vault.wiki_dir(),
+                Some(&vault.prompts_dir()),
+                backend.as_ref(),
+                config.jobs,
+                config.dry_run,
+            ).await?;
+            vault.save_manifest(&manifest)?;
+            if !config.quiet {
+                println!(
+                    "Compiled: {} new, {} merged, {} errors",
+                    result.compiled.len(),
+                    result.merged.len(),
+                    result.errors.len(),
+                );
+            }
+            Ok(())
+        }
         Commands::Index => todo!("index"),
         Commands::Run { .. } => todo!("run"),
         Commands::Status { .. } => todo!("status"),
