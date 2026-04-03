@@ -1,4 +1,5 @@
 mod cli;
+mod collect;
 mod config;
 mod llm;
 mod logging;
@@ -30,7 +31,29 @@ async fn main() -> anyhow::Result<()> {
             }
             Ok(())
         }
-        Commands::Collect => todo!("collect"),
+        Commands::Collect => {
+            vault.ensure_initialized()?;
+            let mut manifest = vault.load_manifest()?;
+            let result = collect::collect(&vault.raw_dir(), &mut manifest)?;
+            vault.save_manifest(&manifest)?;
+            if config.json {
+                println!("{}", serde_json::json!({
+                    "new": result.new_files,
+                    "modified": result.modified_files,
+                    "deleted": result.deleted_files,
+                    "unchanged": result.unchanged_files.len(),
+                }));
+            } else if !config.quiet {
+                println!(
+                    "Collected: {} new, {} modified, {} deleted, {} unchanged",
+                    result.new_files.len(),
+                    result.modified_files.len(),
+                    result.deleted_files.len(),
+                    result.unchanged_files.len(),
+                );
+            }
+            Ok(())
+        }
         Commands::Compile => todo!("compile"),
         Commands::Index => todo!("index"),
         Commands::Run { .. } => todo!("run"),
