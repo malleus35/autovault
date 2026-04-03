@@ -3,6 +3,7 @@ mod collect;
 mod compile;
 mod config;
 mod index;
+mod lint;
 mod llm;
 mod logging;
 mod manifest;
@@ -141,7 +142,31 @@ async fn main() -> anyhow::Result<()> {
             }
             Ok(())
         }
-        Commands::Lint { .. } => todo!("lint"),
+        Commands::Lint { deep, fix } => {
+            vault.ensure_initialized()?;
+            let backend = if *deep { Some(llm::detect_backend()?) } else { None };
+            let result = lint::lint(
+                &vault.wiki_dir(),
+                Some(&vault.prompts_dir()),
+                backend.as_deref(),
+                *deep,
+                *fix,
+            ).await?;
+            if config.json {
+                let issues: Vec<serde_json::Value> = result.issues.iter().map(|i| {
+                    serde_json::json!({"file": i.file, "rule": i.rule, "message": i.message})
+                }).collect();
+                println!("{}", serde_json::to_string_pretty(&serde_json::json!({
+                    "issues": issues, "fixed": result.fixed
+                }))?);
+            } else if !config.quiet {
+                for issue in &result.issues {
+                    println!("[{}] {}: {}", issue.rule, issue.file, issue.message);
+                }
+                println!("\n{} issues found, {} fixed", result.issues.len(), result.fixed);
+            }
+            Ok(())
+        }
         Commands::Qa { .. } => todo!("qa"),
         Commands::Conflicts => todo!("conflicts"),
     }
