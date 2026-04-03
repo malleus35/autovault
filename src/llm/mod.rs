@@ -11,6 +11,7 @@ pub struct LlmResponse {
 }
 
 #[async_trait]
+#[allow(dead_code)]
 pub trait LlmBackend: Send + Sync {
     async fn call(&self, prompt: &str, input: &str) -> Result<LlmResponse>;
     fn name(&self) -> &str;

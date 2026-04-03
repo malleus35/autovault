@@ -57,6 +57,7 @@ async fn run_inner(
         backend,
         jobs,
         dry_run,
+        Some(&vault.logs_dir()),
     )
     .await?;
 

@@ -97,6 +97,7 @@ async fn run_command(command: &Commands, config: &Config, vault: &Vault) -> anyh
                 backend.as_ref(),
                 config.jobs,
                 config.dry_run,
+                Some(&vault.logs_dir()),
             ).await?;
             vault.save_manifest(&manifest)?;
             if !config.quiet {

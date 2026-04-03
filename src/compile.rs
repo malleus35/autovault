@@ -1,9 +1,10 @@
 use anyhow::{Context, Result};
 use chrono::Utc;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use tokio::sync::Semaphore;
 
 use crate::llm::LlmBackend;
+use crate::logging::ExecutionLog;
 use crate::manifest::{FileStatus, Manifest};
 use crate::parser::extract_topic;
 use crate::prompts::get_prompt;
@@ -24,6 +25,7 @@ pub async fn compile(
     backend: &dyn LlmBackend,
     jobs: usize,
     dry_run: bool,
+    logs_dir: Option<&Path>,
 ) -> Result<CompileResult> {
     let pending: Vec<String> = manifest
         .files
@@ -49,10 +51,14 @@ pub async fn compile(
         skipped: 0,
     };
 
+    let log_path = logs_dir.map(|d| d.join("run.jsonl"));
+
     for filename in &pending {
         let _permit = semaphore.acquire().await?;
+        let start = std::time::Instant::now();
         match compile_one(filename, raw_dir, wiki_dir, prompts_dir, backend).await {
             Ok(output) => {
+                let duration = start.elapsed();
                 let entry = manifest.files.get_mut(filename).unwrap();
                 entry.status = FileStatus::Compiled;
                 entry.last_processed = Some(Utc::now());
@@ -68,6 +74,18 @@ pub async fn compile(
                     });
                     topic_entry.note_count += 1;
                     topic_entry.last_updated = Utc::now();
+                }
+
+                if let Some(ref lp) = log_path {
+                    let prompt_name = if output.was_merge { "compile_merge" } else { "compile_note" };
+                    let _ = ExecutionLog {
+                        timestamp: Utc::now(),
+                        prompt: prompt_name.to_string(),
+                        input_file: filename.clone(),
+                        duration_s: duration.as_secs_f64(),
+                        status: "ok".to_string(),
+                        output_length: output.wiki_path.len(),
+                    }.append_to_file(lp);
                 }
 
                 if output.was_merge {
@@ -94,6 +112,16 @@ pub async fn compile(
                     }
                     Err(e2) => {
                         manifest.files.get_mut(filename).unwrap().status = FileStatus::Error;
+                        if let Some(ref lp) = log_path {
+                            let _ = ExecutionLog {
+                                timestamp: Utc::now(),
+                                prompt: "compile_note".to_string(),
+                                input_file: filename.clone(),
+                                duration_s: start.elapsed().as_secs_f64(),
+                                status: "error".to_string(),
+                                output_length: 0,
+                            }.append_to_file(lp);
+                        }
                         result.errors.push((filename.clone(), format!("{}: {}", e, e2)));
                     }
                 }
@@ -232,7 +260,7 @@ mod tests {
         fn name(&self) -> &str { "failing_mock" }
     }
 
-    fn setup() -> (TempDir, PathBuf, PathBuf) {
+    fn setup() -> (TempDir, std::path::PathBuf, std::path::PathBuf) {
         let dir = TempDir::new().unwrap();
         let raw = dir.path().join("raw");
         let wiki = dir.path().join("wiki");
@@ -260,7 +288,7 @@ mod tests {
         });
 
         let backend = MockBackend::new("---\ntopic: Rust\n---\n# Compiled Wiki\nProcessed content");
-        let result = compile(&mut manifest, &raw, &wiki, None, &backend, 3, false).await.unwrap();
+        let result = compile(&mut manifest, &raw, &wiki, None, &backend, 3, false, None).await.unwrap();
 
         assert_eq!(result.compiled.len(), 1);
         assert!(result.merged.is_empty());
@@ -293,7 +321,7 @@ mod tests {
         });
 
         let backend = MockBackend::new("# Merged Wiki\nCombined content");
-        let result = compile(&mut manifest, &raw, &wiki, None, &backend, 3, false).await.unwrap();
+        let result = compile(&mut manifest, &raw, &wiki, None, &backend, 3, false, None).await.unwrap();
 
         assert!(result.compiled.is_empty());
         assert_eq!(result.merged.len(), 1);
@@ -316,7 +344,7 @@ mod tests {
 
         // Fails once then succeeds
         let backend = FailingBackend::new(1);
-        let result = compile(&mut manifest, &raw, &wiki, None, &backend, 3, false).await.unwrap();
+        let result = compile(&mut manifest, &raw, &wiki, None, &backend, 3, false, None).await.unwrap();
 
         assert_eq!(result.compiled.len(), 1);
         assert!(result.errors.is_empty());
@@ -338,7 +366,7 @@ mod tests {
         });
 
         let backend = MockBackend::new("should not be called");
-        let result = compile(&mut manifest, &raw, &wiki, None, &backend, 3, true).await.unwrap();
+        let result = compile(&mut manifest, &raw, &wiki, None, &backend, 3, true, None).await.unwrap();
 
         assert_eq!(result.skipped, 1);
         assert!(result.compiled.is_empty());
