@@ -10,6 +10,7 @@ mod manifest;
 mod parser;
 mod pipeline;
 mod prompts;
+mod qa;
 mod utils;
 mod vault;
 
@@ -167,7 +168,31 @@ async fn main() -> anyhow::Result<()> {
             }
             Ok(())
         }
-        Commands::Qa { .. } => todo!("qa"),
+        Commands::Qa { recompile } => {
+            vault.ensure_initialized()?;
+            let mut manifest = vault.load_manifest()?;
+            let backend = llm::detect_backend()?;
+            let result = qa::qa(
+                &mut manifest,
+                &vault.raw_dir(),
+                &vault.wiki_dir(),
+                Some(&vault.prompts_dir()),
+                backend.as_ref(),
+                *recompile,
+            ).await?;
+            if *recompile && !result.recompile_triggered.is_empty() {
+                vault.save_manifest(&manifest)?;
+            }
+            if !config.quiet {
+                for review in &result.reviewed {
+                    println!("[score={}] {} → {}: {}", review.score, review.raw_file, review.wiki_file, review.feedback);
+                }
+                if !result.recompile_triggered.is_empty() {
+                    println!("{} files marked for recompile", result.recompile_triggered.len());
+                }
+            }
+            Ok(())
+        }
         Commands::Conflicts => todo!("conflicts"),
     }
 }
