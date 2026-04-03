@@ -2,6 +2,7 @@ mod cli;
 mod collect;
 mod compile;
 mod config;
+mod conflicts;
 mod index;
 mod lint;
 mod llm;
@@ -193,6 +194,32 @@ async fn main() -> anyhow::Result<()> {
             }
             Ok(())
         }
-        Commands::Conflicts => todo!("conflicts"),
+        Commands::Conflicts => {
+            vault.ensure_initialized()?;
+            let backend = llm::detect_backend()?;
+            let result = conflicts::detect_conflicts(
+                &vault.wiki_dir(),
+                &vault.state_dir(),
+                Some(&vault.prompts_dir()),
+                backend.as_ref(),
+            ).await?;
+            if config.json {
+                println!("{}", serde_json::to_string_pretty(&result.conflicts)?);
+            } else if !config.quiet {
+                if result.conflicts.is_empty() {
+                    println!("No conflicts detected.");
+                } else {
+                    for c in &result.conflicts {
+                        println!(
+                            "[{}] {} ↔ {}: {} (tags: {})",
+                            c.severity, c.file_a, c.file_b, c.explanation,
+                            c.shared_tags.join(", ")
+                        );
+                    }
+                    println!("\n{} conflicts found", result.conflicts.len());
+                }
+            }
+            Ok(())
+        }
     }
 }
