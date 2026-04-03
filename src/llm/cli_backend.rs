@@ -23,18 +23,26 @@ impl LlmBackend for CliBackend {
         let full_input = format!("{}\n\n---\n\n{}", prompt, input);
         let start = Instant::now();
 
-        let output = Command::new(&self.command)
+        let mut child = Command::new(&self.command)
             .arg("-p")
             .arg(&full_input)
-            .output()
+            .arg("--output-format")
+            .arg("text")
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .with_context(|| format!("spawning {} CLI", self.command))?;
+
+        let output = child
+            .wait_with_output()
             .await
-            .with_context(|| format!("running {} CLI", self.command))?;
+            .with_context(|| format!("waiting for {} CLI", self.command))?;
 
         let duration = start.elapsed();
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            anyhow::bail!("{} CLI failed: {}", self.command, stderr);
+            anyhow::bail!("{} CLI failed (exit {}): {}", self.command, output.status, stderr);
         }
 
         let content = String::from_utf8(output.stdout)

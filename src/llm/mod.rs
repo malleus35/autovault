@@ -18,19 +18,34 @@ pub trait LlmBackend: Send + Sync {
 }
 
 pub fn detect_backend() -> Result<Box<dyn LlmBackend>> {
-    // Check for claude CLI first, then fall back to others
-    if which_exists("claude") {
-        return Ok(Box::new(cli_backend::CliBackend::new("claude")));
+    // Try to resolve the actual path of the claude CLI
+    if let Some(path) = resolve_command("claude") {
+        return Ok(Box::new(cli_backend::CliBackend::new(&path)));
     }
     anyhow::bail!("No LLM backend found. Install 'claude' CLI.")
 }
 
-fn which_exists(cmd: &str) -> bool {
+fn resolve_command(cmd: &str) -> Option<String> {
+    // Check common known paths first
+    let known_paths = [
+        format!("{}/.claude/local/{}", std::env::var("HOME").unwrap_or_default(), cmd),
+        format!("/usr/local/bin/{}", cmd),
+        format!("/opt/homebrew/bin/{}", cmd),
+    ];
+    for path in &known_paths {
+        if std::path::Path::new(path).exists() {
+            return Some(path.clone());
+        }
+    }
+    // Fall back to `which`
     std::process::Command::new("which")
         .arg(cmd)
         .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
+        .ok()
+        .filter(|o| o.status.success())
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
 }
 
 #[cfg(test)]
