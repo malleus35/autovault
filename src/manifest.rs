@@ -115,4 +115,68 @@ mod tests {
         let json = serde_json::to_string(&entry).unwrap();
         assert!(json.contains("\"compiled\""));
     }
+
+    #[test]
+    fn json_compatibility_with_bash_format() {
+        // Simulate a manifest.json from the bash version
+        let json_str = r#"{
+            "version": "1.0",
+            "last_run": "2025-01-15T10:30:00Z",
+            "files": {
+                "meeting-notes.md": {
+                    "sha256": "a1b2c3d4e5f6",
+                    "status": "compiled",
+                    "first_seen": "2025-01-10T08:00:00Z",
+                    "last_processed": "2025-01-15T10:30:00Z",
+                    "output_files": ["Work/meeting-notes_wiki.md"],
+                    "compile_count": 2
+                },
+                "new-idea.md": {
+                    "sha256": "f6e5d4c3b2a1",
+                    "status": "pending",
+                    "first_seen": "2025-01-14T12:00:00Z",
+                    "last_processed": null,
+                    "output_files": [],
+                    "compile_count": 0
+                }
+            },
+            "topics": {
+                "Work": {
+                    "note_count": 5,
+                    "last_updated": "2025-01-15T10:30:00Z"
+                }
+            }
+        }"#;
+
+        let manifest: Manifest = serde_json::from_str(json_str).unwrap();
+        assert_eq!(manifest.version, "1.0");
+        assert!(manifest.last_run.is_some());
+        assert_eq!(manifest.files.len(), 2);
+        assert_eq!(manifest.files["meeting-notes.md"].status, FileStatus::Compiled);
+        assert_eq!(manifest.files["meeting-notes.md"].compile_count, 2);
+        assert_eq!(manifest.files["new-idea.md"].status, FileStatus::Pending);
+        assert!(manifest.files["new-idea.md"].last_processed.is_none());
+        assert_eq!(manifest.topics["Work"].note_count, 5);
+
+        // Re-serialize and verify it roundtrips
+        let reserialized = serde_json::to_string_pretty(&manifest).unwrap();
+        let reloaded: Manifest = serde_json::from_str(&reserialized).unwrap();
+        assert_eq!(reloaded.files.len(), 2);
+        assert_eq!(reloaded.topics.len(), 1);
+    }
+
+    #[test]
+    fn all_file_statuses_roundtrip() {
+        for (status, expected_str) in [
+            (FileStatus::Pending, "pending"),
+            (FileStatus::Compiled, "compiled"),
+            (FileStatus::Error, "error"),
+            (FileStatus::Deleted, "deleted"),
+        ] {
+            let json = serde_json::to_string(&status).unwrap();
+            assert_eq!(json, format!("\"{}\"", expected_str));
+            let deserialized: FileStatus = serde_json::from_str(&json).unwrap();
+            assert_eq!(deserialized, status);
+        }
+    }
 }

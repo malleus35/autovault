@@ -241,4 +241,35 @@ mod tests {
         // Top-level index should still be created
         assert!(wiki.join("_index.md").exists());
     }
+
+    #[tokio::test]
+    async fn rebuild_after_adding_note() {
+        let (dir, mut manifest) = create_test_vault();
+        let wiki = dir.path().join("wiki");
+        let backend = MockBackend;
+
+        // Build initial index
+        build_index(&manifest, &wiki, None, &backend).await.unwrap();
+        let initial_content = std::fs::read_to_string(wiki.join("Rust/_index.md")).unwrap();
+
+        // Add a 3rd note
+        std::fs::write(wiki.join("Rust/note3_wiki.md"), "# Note 3\nNew content").unwrap();
+        manifest.files.insert("note3.md".to_string(), FileEntry {
+            sha256: "c".to_string(),
+            status: FileStatus::Compiled,
+            first_seen: Utc::now(),
+            last_processed: Some(Utc::now()),
+            output_files: vec!["Rust/note3_wiki.md".to_string()],
+            compile_count: 1,
+        });
+        manifest.topics.get_mut("Rust").unwrap().note_count = 3;
+
+        // Rebuild
+        build_index(&manifest, &wiki, None, &backend).await.unwrap();
+        let updated_content = std::fs::read_to_string(wiki.join("Rust/_index.md")).unwrap();
+
+        // Index should be different (now includes note3)
+        assert_ne!(initial_content, updated_content);
+        assert!(updated_content.contains("note3"));
+    }
 }

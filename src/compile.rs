@@ -373,4 +373,48 @@ mod tests {
         // Status should remain pending
         assert_eq!(manifest.files["note.md"].status, FileStatus::Pending);
     }
+
+    #[tokio::test]
+    async fn compile_individual_file_error_isolation() {
+        // When one file fails permanently, others should still compile
+        let (_dir, raw, wiki) = setup();
+        std::fs::write(
+            raw.join("good.md"),
+            "---\ntopic: Test\n---\n# Good Note",
+        ).unwrap();
+        // bad.md will fail because the FailingBackend fails on first 2 calls
+        std::fs::write(
+            raw.join("bad.md"),
+            "---\ntopic: Test\n---\n# Bad Note",
+        ).unwrap();
+
+        let mut manifest = Manifest::new();
+        // Insert bad.md first (alphabetical order means it gets compiled first)
+        manifest.files.insert("bad.md".to_string(), crate::manifest::FileEntry {
+            sha256: "x".to_string(),
+            status: FileStatus::Pending,
+            first_seen: Utc::now(),
+            last_processed: None,
+            output_files: vec![],
+            compile_count: 0,
+        });
+        manifest.files.insert("good.md".to_string(), crate::manifest::FileEntry {
+            sha256: "y".to_string(),
+            status: FileStatus::Pending,
+            first_seen: Utc::now(),
+            last_processed: None,
+            output_files: vec![],
+            compile_count: 0,
+        });
+
+        // Fails first 2 calls (both attempts for bad.md), then succeeds for good.md
+        let backend = FailingBackend::new(2);
+        let result = compile(&mut manifest, &raw, &wiki, None, &backend, 1, false, None).await.unwrap();
+
+        // bad.md should be Error, good.md should be Compiled
+        assert_eq!(manifest.files["bad.md"].status, FileStatus::Error);
+        assert_eq!(manifest.files["good.md"].status, FileStatus::Compiled);
+        assert_eq!(result.errors.len(), 1);
+        assert_eq!(result.compiled.len(), 1);
+    }
 }
