@@ -1,7 +1,10 @@
 mod cli;
 mod config;
+mod llm;
 mod logging;
 mod manifest;
+mod parser;
+mod prompts;
 mod utils;
 mod vault;
 
