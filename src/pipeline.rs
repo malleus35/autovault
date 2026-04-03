@@ -4,14 +4,18 @@ use crate::cli::Stage;
 use crate::collect;
 use crate::compile;
 use crate::index;
+use crate::lint;
 use crate::llm::LlmBackend;
 use crate::manifest::{FileStatus, Manifest};
+use crate::qa;
 use crate::utils::{acquire_lock, release_lock};
 use crate::vault::Vault;
 
 pub struct RunResult {
     pub collect: collect::CollectResult,
     pub compile: compile::CompileResult,
+    pub lint_issues: usize,
+    pub qa_reviewed: usize,
     pub indexed: bool,
 }
 
@@ -57,14 +61,33 @@ async fn run_inner(
     .await?;
 
     // 3. Lint (skippable)
-    if !skip.iter().any(|s| matches!(s, Stage::Lint)) {
-        // lint will be called here when implemented
-    }
+    let lint_issues = if !dry_run && !skip.iter().any(|s| matches!(s, Stage::Lint)) {
+        let result = lint::lint(
+            &vault.wiki_dir(),
+            Some(&vault.prompts_dir()),
+            None, // structural lint only during pipeline run (no --deep)
+            false,
+            false,
+        ).await?;
+        result.issues.len()
+    } else {
+        0
+    };
 
     // 4. QA (skippable)
-    if !skip.iter().any(|s| matches!(s, Stage::Qa)) {
-        // qa will be called here when implemented
-    }
+    let qa_reviewed = if !dry_run && !skip.iter().any(|s| matches!(s, Stage::Qa)) {
+        let result = qa::qa(
+            &mut manifest,
+            &vault.raw_dir(),
+            &vault.wiki_dir(),
+            Some(&vault.prompts_dir()),
+            backend,
+            false, // no auto-recompile during pipeline run
+        ).await?;
+        result.reviewed.len()
+    } else {
+        0
+    };
 
     // 5. Index
     let indexed = if !dry_run {
@@ -87,6 +110,8 @@ async fn run_inner(
     Ok(RunResult {
         collect: collect_result,
         compile: compile_result,
+        lint_issues,
+        qa_reviewed,
         indexed,
     })
 }
@@ -129,6 +154,12 @@ pub fn status(manifest: &Manifest, with_decay: bool) -> StatusResult {
                 .files
                 .iter()
                 .filter(|(_, e)| e.status == FileStatus::Compiled)
+                .filter(|(name, _)| {
+                    // #evergreen 면제: raw 파일에서 태그를 확인할 수는 없지만
+                    // output_files 경로의 wiki 내용을 확인
+                    // 간단한 구현: 이름에 evergreen이 포함되지 않으면 decay 계산
+                    !name.contains("evergreen")
+                })
                 .map(|(name, entry)| {
                     let days = entry
                         .last_processed
@@ -151,6 +182,39 @@ pub fn status(manifest: &Manifest, with_decay: bool) -> StatusResult {
         topics,
         decay_scores,
     }
+}
+
+/// Decay scores considering #evergreen tag in wiki content
+pub fn decay_with_evergreen_check(
+    manifest: &Manifest,
+    wiki_dir: &std::path::Path,
+) -> Vec<(String, f64)> {
+    let now = Utc::now();
+    manifest
+        .files
+        .iter()
+        .filter(|(_, e)| e.status == FileStatus::Compiled)
+        .filter(|(_, entry)| {
+            // Check if any output file contains #evergreen
+            for output in &entry.output_files {
+                let path = wiki_dir.join(output);
+                if let Ok(content) = std::fs::read_to_string(&path) {
+                    if content.contains("#evergreen") {
+                        return false; // exempt from decay
+                    }
+                }
+            }
+            true
+        })
+        .map(|(name, entry)| {
+            let days = entry
+                .last_processed
+                .map(|lp| (now - lp).num_days() as f64)
+                .unwrap_or(30.0);
+            let score = (days / 30.0).min(1.0);
+            (name.clone(), score)
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -202,6 +266,39 @@ mod tests {
         let manifest = vault.load_manifest().unwrap();
         assert!(manifest.last_run.is_some());
         assert_eq!(manifest.files["test.md"].status, FileStatus::Compiled);
+    }
+
+    #[tokio::test]
+    async fn e2e_run_with_skip_lint() {
+        let dir = TempDir::new().unwrap();
+        let vault = Vault::new(dir.path().to_path_buf());
+        vault.init().unwrap();
+
+        std::fs::write(
+            vault.raw_dir().join("test.md"),
+            "---\ntopic: Rust\n---\n# Test\nContent",
+        ).unwrap();
+
+        let backend = MockBackend;
+        let result = run(&vault, &backend, &[Stage::Lint], 3, false).await.unwrap();
+
+        assert_eq!(result.lint_issues, 0); // skipped
+        assert_eq!(result.compile.compiled.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn e2e_run_dry_run() {
+        let dir = TempDir::new().unwrap();
+        let vault = Vault::new(dir.path().to_path_buf());
+        vault.init().unwrap();
+
+        std::fs::write(vault.raw_dir().join("test.md"), "# Test").unwrap();
+
+        let backend = MockBackend;
+        let result = run(&vault, &backend, &[], 3, true).await.unwrap();
+
+        assert_eq!(result.compile.skipped, 1);
+        assert!(!result.indexed);
     }
 
     #[test]
@@ -276,5 +373,45 @@ mod tests {
         assert_eq!(scores.len(), 1);
         // Recently processed should have low decay
         assert!(scores[0].1 < 0.1);
+    }
+
+    #[test]
+    fn decay_evergreen_exemption() {
+        let dir = TempDir::new().unwrap();
+        let wiki = dir.path().join("wiki").join("Topic");
+        std::fs::create_dir_all(&wiki).unwrap();
+        std::fs::write(
+            wiki.join("evergreen_wiki.md"),
+            "---\ntopic: Topic\n---\n# Evergreen\n#evergreen\nTimeless content",
+        ).unwrap();
+        std::fs::write(
+            wiki.join("normal_wiki.md"),
+            "---\ntopic: Topic\n---\n# Normal\nRegular content",
+        ).unwrap();
+
+        let mut manifest = Manifest::new();
+        let old_time = Utc::now() - chrono::Duration::days(60);
+        manifest.files.insert("evergreen.md".to_string(), FileEntry {
+            sha256: "a".to_string(),
+            status: FileStatus::Compiled,
+            first_seen: old_time,
+            last_processed: Some(old_time),
+            output_files: vec!["Topic/evergreen_wiki.md".to_string()],
+            compile_count: 1,
+        });
+        manifest.files.insert("normal.md".to_string(), FileEntry {
+            sha256: "b".to_string(),
+            status: FileStatus::Compiled,
+            first_seen: old_time,
+            last_processed: Some(old_time),
+            output_files: vec!["Topic/normal_wiki.md".to_string()],
+            compile_count: 1,
+        });
+
+        let scores = decay_with_evergreen_check(&manifest, &dir.path().join("wiki"));
+        // Only normal should have decay, evergreen is exempt
+        assert_eq!(scores.len(), 1);
+        assert_eq!(scores[0].0, "normal.md");
+        assert!(scores[0].1 > 0.5); // 60 days / 30 = 2.0, capped at 1.0
     }
 }
