@@ -6,7 +6,7 @@ use std::path::Path;
 
 pub fn file_hash(path: &Path) -> Result<String> {
     let data = fs::read(path).with_context(|| format!("reading {}", path.display()))?;
-    let hash = Sha256::digest(&data);
+    let hash = Sha256::digest(data);
     Ok(format!("{:x}", hash))
 }
 

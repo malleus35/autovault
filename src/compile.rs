@@ -17,6 +17,7 @@ pub struct CompileResult {
     pub skipped: usize,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn compile(
     manifest: &mut Manifest,
     raw_dir: &Path,

@@ -58,7 +58,7 @@ pub async fn detect_conflicts(
     let prompt = get_prompt("conflict_check", prompts_dir)
         .context("conflict_check prompt not found")?;
 
-    for (_tag, files) in &tag_map {
+    for files in tag_map.values() {
         if files.len() < 2 {
             continue;
         }
@@ -97,34 +97,31 @@ pub async fn detect_conflicts(
                     shared.join(", ")
                 );
 
-                match backend.call(&prompt, &input).await {
-                    Ok(response) => {
-                        if let Ok(json) = crate::parser::parse_json_response(&response.content) {
-                            let has_conflict = json
-                                .get("conflict")
-                                .and_then(|v| v.as_bool())
-                                .unwrap_or(false);
+                if let Ok(response) = backend.call(&prompt, &input).await {
+                    if let Ok(json) = crate::parser::parse_json_response(&response.content) {
+                        let has_conflict = json
+                            .get("conflict")
+                            .and_then(|v| v.as_bool())
+                            .unwrap_or(false);
 
-                            if has_conflict {
-                                conflicts.push(Conflict {
-                                    file_a: name_a.clone(),
-                                    file_b: name_b.clone(),
-                                    shared_tags: shared,
-                                    severity: json
-                                        .get("severity")
-                                        .and_then(|v| v.as_str())
-                                        .unwrap_or("unknown")
-                                        .to_string(),
-                                    explanation: json
-                                        .get("explanation")
-                                        .and_then(|v| v.as_str())
-                                        .unwrap_or("")
-                                        .to_string(),
-                                });
-                            }
+                        if has_conflict {
+                            conflicts.push(Conflict {
+                                file_a: name_a.clone(),
+                                file_b: name_b.clone(),
+                                shared_tags: shared,
+                                severity: json
+                                    .get("severity")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("unknown")
+                                    .to_string(),
+                                explanation: json
+                                    .get("explanation")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("")
+                                    .to_string(),
+                            });
                         }
                     }
-                    Err(_) => {} // Skip errors
                 }
             }
         }

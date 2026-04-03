@@ -17,7 +17,7 @@ pub async fn build_index(
 ) -> Result<()> {
     // Group wiki files by topic
     let mut topic_files: HashMap<String, Vec<String>> = HashMap::new();
-    for (_filename, entry) in &manifest.files {
+    for entry in manifest.files.values() {
         for output in &entry.output_files {
             // output is like "TopicName/note_wiki.md"
             if let Some(topic_name) = output.split('/').next() {

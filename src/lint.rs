@@ -83,24 +83,21 @@ pub async fn lint(
             if let Some(backend) = backend {
                 let prompt = get_prompt("lint_check", prompts_dir)
                     .unwrap_or_else(|| "Review this note for quality issues.".to_string());
-                match backend.call(&prompt, &content).await {
-                    Ok(response) => {
-                        if let Ok(json) = crate::parser::parse_json_response(&response.content) {
-                            if let Some(lint_issues) = json.get("issues").and_then(|v| v.as_array()) {
-                                for item in lint_issues {
-                                    if let Some(msg) = item.get("message").and_then(|v| v.as_str()) {
-                                        issues.push(LintIssue {
-                                            file: filename.clone(),
-                                            rule: "semantic".to_string(),
-                                            message: msg.to_string(),
-                                            fixable: false,
-                                        });
-                                    }
+                if let Ok(response) = backend.call(&prompt, &content).await {
+                    if let Ok(json) = crate::parser::parse_json_response(&response.content) {
+                        if let Some(lint_issues) = json.get("issues").and_then(|v| v.as_array()) {
+                            for item in lint_issues {
+                                if let Some(msg) = item.get("message").and_then(|v| v.as_str()) {
+                                    issues.push(LintIssue {
+                                        file: filename.clone(),
+                                        rule: "semantic".to_string(),
+                                        message: msg.to_string(),
+                                        fixable: false,
+                                    });
                                 }
                             }
                         }
                     }
-                    Err(_) => {} // Skip LLM errors during lint
                 }
             }
         }
@@ -145,10 +142,9 @@ pub async fn lint(
 
 fn extract_body(content: &str) -> &str {
     let trimmed = content.trim_start();
-    if trimmed.starts_with("---") {
-        if let Some(pos) = trimmed[3..].find("\n---") {
-            let after = &trimmed[3 + pos + 4..];
-            return after;
+    if let Some(rest) = trimmed.strip_prefix("---") {
+        if let Some(pos) = rest.find("\n---") {
+            return &rest[pos + 4..];
         }
     }
     content
@@ -185,10 +181,8 @@ fn find_file_recursive(dir: &Path, filename: &str) -> bool {
             if path.is_file() && path.file_name().map(|n| n == filename).unwrap_or(false) {
                 return true;
             }
-            if path.is_dir() {
-                if find_file_recursive(&path, filename) {
-                    return true;
-                }
+            if path.is_dir() && find_file_recursive(&path, filename) {
+                return true;
             }
         }
     }
