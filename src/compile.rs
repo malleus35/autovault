@@ -27,12 +27,13 @@ pub async fn compile(
     dry_run: bool,
     logs_dir: Option<&Path>,
 ) -> Result<CompileResult> {
-    let pending: Vec<String> = manifest
+    let mut pending: Vec<String> = manifest
         .files
         .iter()
         .filter(|(_, e)| e.status == FileStatus::Pending)
         .map(|(k, _)| k.clone())
         .collect();
+    pending.sort(); // deterministic order
 
     if dry_run {
         return Ok(CompileResult {
