@@ -7,6 +7,7 @@ mod llm;
 mod logging;
 mod manifest;
 mod parser;
+mod pipeline;
 mod prompts;
 mod utils;
 mod vault;
@@ -95,8 +96,51 @@ async fn main() -> anyhow::Result<()> {
             }
             Ok(())
         }
-        Commands::Run { .. } => todo!("run"),
-        Commands::Status { .. } => todo!("status"),
+        Commands::Run { skip } => {
+            vault.ensure_initialized()?;
+            let backend = llm::detect_backend()?;
+            let result = pipeline::run(&vault, backend.as_ref(), skip, config.jobs, config.dry_run).await?;
+            if !config.quiet {
+                println!(
+                    "Run complete: {} collected, {} compiled, {} merged, {} errors",
+                    result.collect.new_files.len() + result.collect.modified_files.len(),
+                    result.compile.compiled.len(),
+                    result.compile.merged.len(),
+                    result.compile.errors.len(),
+                );
+            }
+            Ok(())
+        }
+        Commands::Status { decay } => {
+            vault.ensure_initialized()?;
+            let manifest = vault.load_manifest()?;
+            let s = pipeline::status(&manifest, *decay);
+            if config.json {
+                let mut json = serde_json::json!({
+                    "pending": s.pending,
+                    "compiled": s.compiled,
+                    "error": s.error,
+                    "deleted": s.deleted,
+                    "topics": s.topics,
+                });
+                if let Some(scores) = &s.decay_scores {
+                    json["decay_scores"] = serde_json::json!(scores);
+                }
+                println!("{}", serde_json::to_string_pretty(&json)?);
+            } else {
+                println!("Pending: {}, Compiled: {}, Error: {}, Deleted: {}", s.pending, s.compiled, s.error, s.deleted);
+                for (topic, count) in &s.topics {
+                    println!("  {}: {} notes", topic, count);
+                }
+                if let Some(scores) = &s.decay_scores {
+                    println!("\nDecay scores:");
+                    for (name, score) in scores {
+                        println!("  {}: {:.2}", name, score);
+                    }
+                }
+            }
+            Ok(())
+        }
         Commands::Lint { .. } => todo!("lint"),
         Commands::Qa { .. } => todo!("qa"),
         Commands::Conflicts => todo!("conflicts"),
